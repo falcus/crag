@@ -1,33 +1,49 @@
 import os
 import getpass
+import uuid
+from typing import List, Dict, Any
+from typing_extensions import TypedDict
+
+# Third-party imports
 from dotenv import load_dotenv
+from IPython.display import Image, display
 
+# LangChain core imports
+from langchain.schema import Document
+from langchain.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import SKLearnVectorStore
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import RetrievalQA
+
+# Graph related imports
+from langgraph.graph import START, END, StateGraph
 load_dotenv()
 
-## Build Index
-
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-
 ### from langchain_cohere import CohereEmbeddings
-
+os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 # Set embeddings
 #
 
-local_llm = "llama3"
+
+llm = ChatGroq(
+        model="llama-3.1-8b-instant",
+        temperature=0,
+        max_tokens=4096,
+)
+
+#local_llm = "llama3"
 model_tested = "llama-8b"
 metadata = f"CRAG, {model_tested}"
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import SKLearnVectorStore
-from langchain_nomic.embeddings import NomicEmbeddings  # local
-from langchain_openai import OpenAIEmbeddings  # api
 
+
+#Document Processing
 urls = [
     "https://lilianweng.github.io/posts/2023-06-23-agent/",
     "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
@@ -44,23 +60,13 @@ text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
 )
 
 
-
+#Embedding
 # Split the documents into chunks
 doc_splits = text_splitter.split_documents(docs_list)
 
-# Embedding
-'''
-embedding=NomicEmbeddings(
-    model="nomic-embed-text-v1.5",
-    inference_mode="local",
-    use_cuda=False
-)
-'''
 
 embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
-"""embedding = OpenAIEmbeddings()
-"""
 # Add the document chunks to the "vector store"
 vectorstore = SKLearnVectorStore.from_documents(
     documents=doc_splits,
@@ -68,58 +74,45 @@ vectorstore = SKLearnVectorStore.from_documents(
 )
 retriever = vectorstore.as_retriever(k=4)
 
-# Defining Retrieval Grader
-
-### Retrieval Grader
-
-from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOllama
-from langchain_core.output_parsers import JsonOutputParser
-
-# LLM
-llm = ChatOllama(model=local_llm, format="json", temperature=0)
+# Retrieval Grader
 
 # Prompt
-prompt = PromptTemplate(
-    template="""You are a teacher grading a quiz. You will be given: 
+grading_prompt = PromptTemplate.from_template(
+    """You are a teacher grading a quiz. You will be given: 
     1/ a QUESTION
     2/ A FACT provided by the student
     
     You are grading RELEVANCE RECALL:
     A score of 1 means that ANY of the statements in the FACT are relevant to the QUESTION. 
     A score of 0 means that NONE of the statements in the FACT are relevant to the QUESTION. 
-    1 is the highest (best) score. 0 is the lowest score you can give. 
-    
-    Explain your reasoning in a step-by-step manner. Ensure your reasoning and conclusion are correct. 
-    
-    Avoid simply stating the correct answer at the outset.
+    1 is the highest (best) score. 0 is the lowest score you can give.
     
     Question: {question} \n
     Fact: \n\n {documents} \n\n
     
-    Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question. \n
-    Provide the binary score as a JSON with a single key 'score' and no premable or explanation.
-    """,
-    input_variables=["question", "documents"],
+    IMPORTANT: Respond ONLY with a JSON object containing a single key 'score' with value either 'yes' or 'no'.
+    Example response: {{"score": "yes"}} or {{"score": "no"}}
+    Do not include any other text or explanation.
+    """
 )
 
-retrieval_grader = prompt | llm | JsonOutputParser()
+retrieval_grader = grading_prompt | llm | JsonOutputParser()
+
 question = "agent memory"
 docs = retriever.invoke(question)
 doc_txt = docs[1].page_content
 print(retrieval_grader.invoke({"question": question, "documents": doc_txt}))
-
 #at this point we should recieve a JSON response to our retrieval query that will rate
 #the document as 1-relevant or 0-irrelevant
 
-### No we also have to set up a Generator, that will return the answer to our question in a 
+###we also have to set up a Generator, that will return the answer to our question in a 
 # way that we want.
 
-from langchain_core.output_parsers import StrOutputParser
+
 
 # Prompt
-prompt = PromptTemplate(
-    template="""You are an assistant for question-answering tasks. 
+qa_prompt = PromptTemplate.from_template(
+    """You are an assistant for question-answering tasks. 
     
     Use the following documents to answer the question. 
     
@@ -129,30 +122,18 @@ prompt = PromptTemplate(
     Question: {question} 
     Documents: {documents} 
     Answer: 
-    """,
-    input_variables=["question", "documents"],
+    """
 )
 
-# LLM
-llm = ChatOllama(model=local_llm, temperature=0)
 
 # Chain
-rag_chain = prompt | llm | StrOutputParser()
+rag_chain = qa_prompt | llm | StrOutputParser()
 
-# Run
-generation = rag_chain.invoke({"documents": docs, "question": question})
-print(generation)
-
-from langchain_community.tools.tavily_search import TavilySearchResults
 
 web_search_tool = TavilySearchResults(k=3)
 
 #The Graph State is a dictionary we pass between nodes that updates based on decisions made
-from typing import List
-from typing_extensions import TypedDict
-from IPython.display import Image, display
-from langchain.schema import Document
-from langgraph.graph import START, END, StateGraph
+
 
 
 class GraphState(TypedDict):
@@ -319,6 +300,9 @@ custom_graph = workflow.compile()
 display(Image(custom_graph.get_graph(xray=True).draw_mermaid_png()))
 
 
+custom_graph = workflow.compile()
+
+
 #Finally, all we have to do is execute our graph.
 #RUN
 import uuid
@@ -335,9 +319,6 @@ def predict_custom_agent_local_answer(example: dict):
 example = {"input": "What are the types of agent memory?"}
 response = predict_custom_agent_local_answer(example)
 response'''
-
-
-custom_graph = workflow.compile()
 
 # Create the initial state
 initial_state = {

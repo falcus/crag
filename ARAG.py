@@ -3,6 +3,7 @@ import getpass
 import uuid
 from typing import List, Dict, Any
 from typing_extensions import TypedDict
+import os.path
 
 # Third-party imports
 from dotenv import load_dotenv
@@ -15,7 +16,7 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import SKLearnVectorStore
+from langchain_community.vectorstores import Chroma
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -42,36 +43,55 @@ model_tested = "llama-8b"
 metadata = f"CRAG, {model_tested}"
 
 
-
 #Document Processing
-urls = [
-    "https://lilianweng.github.io/posts/2023-06-23-agent/",
-    "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
-    "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
-]
+def get_or_create_vector_store():
+    vector_store_path = "chroma_db"
+    embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    
+    #if it exists, load it
+    if os.path.exists(vector_store_path):
+        print("Loading existing vector store...")
+        vectorstore = Chroma(
+        persist_directory=vector_store_path,
+        embedding_function=embedding
+        )
+        return vectorstore
+        
+    print("Creating new vector store...")
 
-#loading documents from the urls
-docs = [WebBaseLoader(url).load() for url in urls]
-docs_list = [item for sublist in docs for item in sublist]
+    urls = [
+        "https://lilianweng.github.io/posts/2023-06-23-agent/",
+        "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
+        "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
+    ]
 
-#Initialize a text_splitter
-text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-    chunk_size=250, chunk_overlap=0
-)
+    #loading documents from the urls
+    docs = [WebBaseLoader(url).load() for url in urls]
+    docs_list = [item for sublist in docs for item in sublist]
 
+    #Initialize a text_splitter
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=250, chunk_overlap=0
+    )
 
-#Embedding
-# Split the documents into chunks
-doc_splits = text_splitter.split_documents(docs_list)
+    #Embedding
+    # Split the documents into chunks
+    doc_splits = text_splitter.split_documents(docs_list)
 
+  
 
-embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    # Add the document chunks to the "vector store"
+    vectorstore = Chroma.from_documents(
+        documents=doc_splits,
+        persist_directory=vector_store_path,
+        embedding_function=embedding,
+    )
 
-# Add the document chunks to the "vector store"
-vectorstore = SKLearnVectorStore.from_documents(
-    documents=doc_splits,
-    embedding=embedding,
-)
+    vectorstore.persist()
+
+    return vectorstore
+
+vectorstore = get_or_create_vector_store()
 retriever = vectorstore.as_retriever(k=4)
 
 # Retrieval Grader
@@ -98,10 +118,11 @@ grading_prompt = PromptTemplate.from_template(
 
 retrieval_grader = grading_prompt | llm | JsonOutputParser()
 
-question = "agent memory"
+'''question = "agent memory"
 docs = retriever.invoke(question)
 doc_txt = docs[1].page_content
 print(retrieval_grader.invoke({"question": question, "documents": doc_txt}))
+'''
 #at this point we should recieve a JSON response to our retrieval query that will rate
 #the document as 1-relevant or 0-irrelevant
 
@@ -165,8 +186,16 @@ def retrieve(state):
         state (dict): New key added to state, documents, that contains retrieved documents
     """
     question = state["question"]
-    documents = retriever.invoke(question)
     steps = state["steps"]
+
+    if not question.strip():
+        return {
+            "documents": [],
+            "question": question,
+            "steps": steps,
+            "generation": "Please provide a question."
+        }
+    documents = retriever.invoke(question)
     steps.append("retrieve_documents")
     return {"documents": documents, "question": question, "steps": steps}
 
@@ -244,16 +273,30 @@ def web_search(state):
     question = state["question"]
     documents = state.get("documents", [])
     steps = state["steps"]
+
+    if not question.strip():
+        return {
+            "documents": documents,
+            "question": question,
+            "steps": steps
+        }
     steps.append("web_search")
     web_results = web_search_tool.invoke({"query": question})
-    documents.extend(
-        [
-            Document(page_content=d["content"], metadata={"url": d["url"]})
-            for d in web_results
-        ]
-    )
+    
+    try:
+        documents.extend(
+            [
+                Document(page_content=d["content"], metadata={"url": d["url"]})
+                for d in web_results
+            ]
+        )
+    except (KeyError, TypeError) as e:
+        print(f"Error processing web results: {e}")
+        #return current state without changes if web search fails
+        return {"documents": documents, 
+            "question": question,
+            "steps": steps}
     return {"documents": documents, "question": question, "steps": steps}
-
 
 def decide_to_generate(state):
     """
@@ -322,7 +365,7 @@ response'''
 
 # Create the initial state
 initial_state = {
-    "question": "How do the types of agent memory work?",
+    "question": "",
     "generation": "",
     "search": "",
     "documents": [],

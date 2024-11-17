@@ -6,14 +6,14 @@ If no relevant answers are found, Tavily web search will be used to find a relev
 
 QA interface is achieved using streamlit.
 
-**SETUP**
+**SETUP**/n
 Required API keys:
 Tavily (https://tavily.com/)
 Groq (https://console.groq.com/keys)
 
 Save these in a .env file
 
-**RUN**
+**RUN**/n
 Install the requirements: pip install requirements.txt
 Run the UI: streamlit run app.py
 

@@ -8,7 +8,7 @@ QA interface is achieved using streamlit.
 
 **SETUP**<br/>
 Required API keys:<br/>
-Tavily (https://tavily.com/)<br/>
+Tavily (https://tavily.com/)
 Groq (https://console.groq.com/keys)
 
 Save these in a .env file

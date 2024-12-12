@@ -1,5 +1,6 @@
 import streamlit as st
 from ARAG import custom_graph  # Import your custom_graph from ARAG.py
+import json  # Import the json module to handle JSON parsing
 
 def process_question(question: str):
     # Create the initial state
@@ -13,7 +14,42 @@ def process_question(question: str):
     
     # Run the graph
     result = custom_graph.invoke(initial_state)
-    return result
+
+    # Parse the result assuming it's a JSON string
+    try:
+        # If result is a string, parse it to a dictionary
+        if isinstance(result, str):
+            result = json.loads(result)
+        
+        # Extract the relevant parts from the result
+        if "thoughts" in result:
+            thoughts = result["thoughts"]
+            answer_text = thoughts.get("text", "No answer provided.")
+            reasoning = thoughts.get("reasoning", "No reasoning provided.")
+            plan = thoughts.get("plan", "No plan provided.")
+            criticism = thoughts.get("criticism", "No criticism provided.")
+            speak = thoughts.get("speak", "No spoken response provided.")
+            
+            # Format the output for display
+            formatted_result = f"""
+            **Answer:** {answer_text}
+            
+            **Reasoning:** {reasoning}
+            
+            **Plan:** 
+            {plan}
+            
+            **Criticism:** {criticism}
+            
+            **Spoken Response:** {speak}
+            """
+        else:
+            formatted_result = "No thoughts generated."
+    
+    except json.JSONDecodeError:
+        formatted_result = "Error parsing the response."
+
+    return formatted_result
 
 # Set up the Streamlit interface
 st.title("RAG Question-Answering System")

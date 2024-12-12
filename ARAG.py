@@ -1,6 +1,4 @@
 import os
-import getpass
-import uuid
 from typing import List, Dict, Any
 from typing_extensions import TypedDict
 import os.path
@@ -16,9 +14,10 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.tools.tavily_search import TavilySearchResults
+from tavily import TavilyClient
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import RetrievalQA
 
@@ -28,6 +27,7 @@ load_dotenv()
 
 ### from langchain_cohere import CohereEmbeddings
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
+os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
 # Set embeddings
 #
 
@@ -151,7 +151,8 @@ qa_prompt = PromptTemplate.from_template(
 rag_chain = qa_prompt | llm | StrOutputParser()
 
 
-web_search_tool = TavilySearchResults(k=3)
+web_search_tool=TavilyClient(api_key = os.getenv("TAVILY_API_KEY"))
+
 
 #The Graph State is a dictionary we pass between nodes that updates based on decisions made
 
@@ -274,28 +275,16 @@ def web_search(state):
     documents = state.get("documents", [])
     steps = state["steps"]
 
-    if not question.strip():
-        return {
-            "documents": documents,
-            "question": question,
-            "steps": steps
-        }
-    steps.append("web_search")
-    web_results = web_search_tool.invoke({"query": question})
-    
-    try:
-        documents.extend(
-            [
-                Document(page_content=d["content"], metadata={"url": d["url"]})
-                for d in web_results
-            ]
-        )
-    except (KeyError, TypeError) as e:
-        print(f"Error processing web results: {e}")
-        #return current state without changes if web search fails
-        return {"documents": documents, 
-            "question": question,
-            "steps": steps}
+    tool = TavilyClient()
+    docs = tool.search(question, search_depth="advanced")["results"]
+    web_results = "\n".join([d["content"] for d in docs])
+    web_results = Document(page_content=web_results)
+    documents.append(web_results)
+
+    print("Docs\n")
+    for doc in documents:
+        print(doc.page_content)
+
     return {"documents": documents, "question": question, "steps": steps}
 
 def decide_to_generate(state):
@@ -363,9 +352,10 @@ example = {"input": "What are the types of agent memory?"}
 response = predict_custom_agent_local_answer(example)
 response'''
 
-# Create the initial state
+# Create the initial stated
+'''
 initial_state = {
-    "question": "",
+    "question": user_question,
     "generation": "",
     "search": "",
     "documents": [],
@@ -378,4 +368,4 @@ result = custom_graph.invoke(initial_state)
 # Print the result
 print("Question:", result["question"])
 print("\nAnswer:", result["generation"])
-print("\nSteps taken:", result["steps"])
+print("\nSteps taken:", result["steps"])'''
